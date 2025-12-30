@@ -190,11 +190,11 @@ class MarkdownPromptParser:
         for match in re.finditer(chapter_pattern, content, re.MULTILINE):
             chapters[match.start()] = match.group(1).strip()
 
-        # テーブル行を解析: | 番号 | タイトル | プロンプト | ページ |
+        # パターン1: 4セル形式 | 番号 | タイトル | プロンプト | ページ |
         # [bg:gray] や [bg:yellow] などのマーカーを除去
-        table_pattern = r'\|\s*(?:\[bg:\w+\])?\s*\**(\d+)\**\s*\|\s*(?:\[bg:\w+\])?\s*\**([^|]+?)\**\s*\|\s*(?:\[bg:\w+\])?\s*(.+?)\s*\|\s*(?:\[bg:\w+\])?\s*(\d+)?\s*\|'
+        table_pattern_4cell = r'\|\s*(?:\[bg:\w+\])?\s*\**(\d+)\**\s*\|\s*(?:\[bg:\w+\])?\s*\**([^|]+?)\**\s*\|\s*(?:\[bg:\w+\])?\s*(.+?)\s*\|\s*(?:\[bg:\w+\])?\s*(\d+)?\s*\|'
 
-        for match in re.finditer(table_pattern, content):
+        for match in re.finditer(table_pattern_4cell, content):
             num = match.group(1).strip()
             title = match.group(2).strip()
             prompt_text = match.group(3).strip()
@@ -211,6 +211,96 @@ class MarkdownPromptParser:
 
             # ヘッダー行をスキップ
             if title in ['---', '|', ''] or prompt_text.startswith('---'):
+                continue
+
+            # 現在の章を特定
+            current_chapter = ""
+            match_pos = match.start()
+            for pos, ch in sorted(chapters.items()):
+                if pos < match_pos:
+                    current_chapter = ch
+
+            self.current_id += 1
+            prompts.append(PromptSample(
+                id=self.current_id,
+                title=f"{num}. {title}" if num else title,
+                content=prompt_text,
+                category=current_chapter,
+                page=page,
+                source_file=filepath
+            ))
+
+        # パターン2: 3セル形式 | **番号** タイトル | プロンプト | ページ |
+        # 技法18以降で使用される形式
+        table_pattern_3cell = r'\|\s*(?:\[bg:\w+\])?\s*\**(\d+)\**\s+([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*\**(\d+)?\**\s*\|'
+
+        # パターン3: 番号とタイトルが別々のbold形式 | **番号** [bg:gray] **タイトル** | プロンプト | **ページ** |
+        # 技法52-56で使用される形式
+        table_pattern_split = r'\|\s*\**(\d+)\**\s+\[bg:\w+\]\s*\**([^|]+?)\**\s*\|\s*([^|]+?)\s*\|\s*\**(\d+)?\**\s*\|'
+
+        for match in re.finditer(table_pattern_split, content):
+            num = match.group(1).strip()
+            title = match.group(2).strip()
+            prompt_text = match.group(3).strip()
+            page = match.group(4).strip() if match.group(4) else ""
+
+            # フォーマットマーカーを除去
+            title = re.sub(r'\[bg:\w+\]', '', title).strip()
+            title = re.sub(r'\*+', '', title).strip()
+            prompt_text = re.sub(r'\[bg:\w+\]', '', prompt_text).strip()
+
+            # プロンプトが短すぎる場合はスキップ（説明行の可能性）
+            if len(prompt_text) < 20:
+                continue
+
+            # ヘッダー行をスキップ
+            if title in ['---', '|', ''] or prompt_text.startswith('---'):
+                continue
+
+            # すでに同じ番号がある場合はスキップ
+            existing_nums = [re.search(r'^(\d+)\.', p.title).group(1) if re.search(r'^(\d+)\.', p.title) else None for p in prompts]
+            if num in existing_nums:
+                continue
+
+            # 現在の章を特定
+            current_chapter = ""
+            match_pos = match.start()
+            for pos, ch in sorted(chapters.items()):
+                if pos < match_pos:
+                    current_chapter = ch
+
+            self.current_id += 1
+            prompts.append(PromptSample(
+                id=self.current_id,
+                title=f"{num}. {title}" if num else title,
+                content=prompt_text,
+                category=current_chapter,
+                page=page,
+                source_file=filepath
+            ))
+
+        for match in re.finditer(table_pattern_3cell, content):
+            num = match.group(1).strip()
+            title = match.group(2).strip()
+            prompt_text = match.group(3).strip()
+            page = match.group(4).strip() if match.group(4) else ""
+
+            # フォーマットマーカーを除去
+            title = re.sub(r'\[bg:\w+\]', '', title).strip()
+            title = re.sub(r'\*+', '', title).strip()
+            prompt_text = re.sub(r'\[bg:\w+\]', '', prompt_text).strip()
+
+            # プロンプトが短すぎる場合はスキップ（説明行の可能性）
+            if len(prompt_text) < 20:
+                continue
+
+            # ヘッダー行をスキップ
+            if title in ['---', '|', ''] or prompt_text.startswith('---'):
+                continue
+
+            # すでに同じ番号がある場合はスキップ（4セルパターンで取得済み）
+            existing_nums = [re.search(r'^(\d+)\.', p.title).group(1) if re.search(r'^(\d+)\.', p.title) else None for p in prompts]
+            if num in existing_nums:
                 continue
 
             # 現在の章を特定
