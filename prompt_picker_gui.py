@@ -21,8 +21,63 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
-# 既存のパーサーをインポート
-from prompt_picker import MarkdownPromptParser, PromptSample, UsageTracker
+# 埋め込みプロンプトデータをインポート
+from prompt_data import PROMPTS
+
+
+@dataclass
+class PromptSample:
+    """プロンプトサンプルのデータモデル"""
+    id: int
+    title: str
+    content: str
+    page: str = ""
+    usage_count: int = 0
+    last_used: str = ""
+
+
+class UsageTracker:
+    """使用履歴を管理"""
+
+    def __init__(self, history_file: str = ".prompt_history.json"):
+        self.history_file = Path(history_file)
+        self.history: Dict[str, Dict] = {}
+        self.load_history()
+
+    def load_history(self):
+        """履歴を読み込み"""
+        if self.history_file.exists():
+            try:
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    self.history = json.load(f)
+            except:
+                self.history = {}
+
+    def save_history(self):
+        """履歴を保存"""
+        with open(self.history_file, 'w', encoding='utf-8') as f:
+            json.dump(self.history, f, ensure_ascii=False, indent=2)
+
+    def record_usage(self, prompt: PromptSample):
+        """使用を記録"""
+        key = prompt.title
+        if key not in self.history:
+            self.history[key] = {"count": 0, "last_used": ""}
+        self.history[key]["count"] += 1
+        self.history[key]["last_used"] = datetime.now().isoformat()
+        self.save_history()
+
+    def apply_usage_to_prompts(self, prompts: List[PromptSample]):
+        """プロンプトに使用履歴を適用"""
+        for prompt in prompts:
+            key = prompt.title
+            if key in self.history:
+                prompt.usage_count = self.history[key]["count"]
+                prompt.last_used = self.history[key]["last_used"]
+
+    def sort_by_usage(self, prompts: List[PromptSample]) -> List[PromptSample]:
+        """使用頻度でソート"""
+        return sorted(prompts, key=lambda p: (-p.usage_count, p.title))
 
 
 # 章と技法番号のマッピング
@@ -59,6 +114,19 @@ def get_chapter_for_prompt(prompt: PromptSample) -> Optional[str]:
     return None
 
 
+def load_prompts() -> List[PromptSample]:
+    """埋め込みデータからプロンプトを読み込み"""
+    prompts = []
+    for data in PROMPTS:
+        prompts.append(PromptSample(
+            id=data["id"],
+            title=data["title"],
+            content=data["content"],
+            page=data.get("page", "")
+        ))
+    return prompts
+
+
 class PromptPickerGUI:
     """GUIベースのプロンプト選択ツール（階層表示版）"""
 
@@ -72,7 +140,7 @@ class PromptPickerGUI:
 
         # ウィンドウ作成
         self.root = tk.Tk()
-        self.root.title("Prompt Picker - プロンプト選択ツール")
+        self.root.title("Prompt Picker - AIを使って考えるための全技術")
         self.root.geometry("1100x750")
         self.root.minsize(900, 600)
 
@@ -115,10 +183,6 @@ class PromptPickerGUI:
 
         style.configure("Chapter.TLabel",
                         font=('Yu Gothic UI', 12, 'bold'))
-
-        style.configure("Freq.TLabel",
-                        font=('Yu Gothic UI', 10),
-                        foreground='#0066cc')
 
     def setup_ui(self):
         """UIを構築"""
@@ -245,7 +309,7 @@ class PromptPickerGUI:
         for i, btn in enumerate(self.freq_buttons):
             if i < len(used_prompts):
                 p = used_prompts[i]
-                btn.configure(text=f"#{p.title[:25]}... ({p.usage_count}回)",
+                btn.configure(text=f"{p.title[:30]}... ({p.usage_count}回)",
                             state=tk.NORMAL)
                 btn.prompt = p
             else:
@@ -273,11 +337,12 @@ class PromptPickerGUI:
             self.listbox.insert(tk.END, f"{chapter} ({count}個)")
 
         self.detail_title.config(text="章を選択してください")
-        self.detail_meta.config(text="")
+        self.detail_meta.config(text="全56技法")
         self.content_text.config(state=tk.NORMAL)
         self.content_text.delete('1.0', tk.END)
         self.content_text.insert('1.0', "左のリストから章を選んでください。\n\n"
-                                         "ダブルクリックまたはEnterで章内のプロンプト一覧を表示します。")
+                                         "ダブルクリックまたはEnterで章内のプロンプト一覧を表示します。\n\n"
+                                         "検索ボックスにキーワードを入力して検索することもできます。")
         self.content_text.config(state=tk.DISABLED)
 
     def show_prompts_in_chapter(self, chapter: str):
@@ -508,52 +573,15 @@ class PromptPickerGUI:
 
 def main():
     """メイン関数"""
-    import argparse
+    # 埋め込みデータからプロンプトを読み込み
+    prompts = load_prompts()
 
-    parser = argparse.ArgumentParser(description='Prompt Picker GUI')
-    parser.add_argument('files', nargs='*', default=['*.md'],
-                        help='読み込むMarkdownファイル')
-    parser.add_argument('-d', '--directory', help='Markdownファイルを探すディレクトリ')
-
-    args = parser.parse_args()
-
-    # ファイルを収集
-    import glob
-    md_files = []
-
-    if args.directory:
-        md_files.extend(glob.glob(os.path.join(args.directory, '**/*.md'), recursive=True))
-
-    for pattern in args.files:
-        md_files.extend(glob.glob(pattern))
-
-    md_files = list(set(md_files))
-
-    if not md_files:
-        messagebox.showerror("エラー", "Markdownファイルが見つかりません")
+    if not prompts:
+        messagebox.showerror("エラー", "プロンプトデータが見つかりませんでした")
         sys.exit(1)
-
-    # パース
-    parser_obj = MarkdownPromptParser()
-    all_prompts = []
-
-    for filepath in md_files:
-        try:
-            prompts = parser_obj.parse_file(filepath)
-            all_prompts.extend(prompts)
-        except Exception as e:
-            print(f"Error parsing {filepath}: {e}")
-
-    if not all_prompts:
-        messagebox.showerror("エラー", "プロンプトが見つかりませんでした")
-        sys.exit(1)
-
-    # IDを振り直し
-    for i, prompt in enumerate(all_prompts, 1):
-        prompt.id = i
 
     # GUI起動
-    app = PromptPickerGUI(all_prompts)
+    app = PromptPickerGUI(prompts)
     app.run()
 
 
